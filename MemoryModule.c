@@ -109,6 +109,7 @@ typedef LPVOID(WINAPI *VirtualAllocFn)(LPVOID, SIZE_T, DWORD, DWORD);
 typedef BOOL(WINAPI *VirtualProtectFn)(LPVOID, SIZE_T, DWORD, PDWORD);
 typedef BOOL(WINAPI *VirtualFreeFn)(LPVOID, SIZE_T, DWORD);
 typedef FARPROC(WINAPI *GetProcAddressFn)(HMODULE, LPCSTR);
+
 // typedef HANDLE(WINAPI *CreateThreadFn)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 // typedef VOID(WINAPI *ExitThreadFn)(DWORD);
 
@@ -116,6 +117,7 @@ VirtualAllocFn My_Virt_Alloc;
 VirtualProtectFn My_Virt_Protect;
 VirtualFreeFn My_Virt_Free;
 GetProcAddressFn My_Get_ProcAddress;
+
 // CreateThreadFn My_Create_Thread;
 // ExitThreadFn My_Exit_Thread;
 
@@ -507,7 +509,6 @@ static BOOL BuildImportTable(PMEMORYMODULE module)
 LPVOID MemoryDefaultAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD protect, void* userdata)
 {
 	UNREFERENCED_PARAMETER(userdata);
-    //printf("Allocating %d bytes at %p\n", size, address);
 	return My_Virt_Alloc(address, size, allocationType, protect);
 }
 
@@ -570,6 +571,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size, CustomAllocFunc
     char obf_Virt_Protect[] = { X_C('V'), X_C('i'), X_C('r'), X_C('t'), X_C('u'), X_C('a'), X_C('l'), X_C('P'), X_C('r'), X_C('o'), X_C('t'), X_C('e'), X_C('c'), X_C('t'), '\0'};
     char obf_Virt_Free[] = { X_C('V'), X_C('i'), X_C('r'), X_C('t'), X_C('u'), X_C('a'), X_C('l'), X_C('F'), X_C('r'), X_C('e'), X_C('e'), '\0'};
     char obf_Get_ProcAddress[] = { X_C('G'), X_C('e'), X_C('t'), X_C('P'), X_C('r'), X_C('o'), X_C('c'), X_C('A'), X_C('d'), X_C('d'), X_C('r'), X_C('e'), X_C('s'), X_C('s'), '\0'};
+
     // char obf_Create_Thread[] = { X_C('C'), X_C('r'), X_C('e'), X_C('a'), X_C('t'), X_C('e'), X_C('T'), X_C('h'), X_C('r'), X_C('e'), X_C('a'), X_C('d'), '\0'};
     // char obf_Exit_Thread[] = { X_C('E'), X_C('x'), X_C('i'), X_C('t'), X_C('T'), X_C('h'), X_C('r'), X_C('e'), X_C('a'), X_C('d'), '\0'};
 
@@ -578,16 +580,18 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size, CustomAllocFunc
     for (int i = 0; obf_Virt_Protect[i] != '\0'; i++) obf_Virt_Protect[i] ^= HEX_K;
     for (int i = 0; obf_Virt_Free[i] != '\0'; i++) obf_Virt_Free[i] ^= HEX_K;
     for (int i = 0; obf_Get_ProcAddress[i] != '\0'; i++) obf_Get_ProcAddress[i] ^= HEX_K;
+
     // for (int i = 0; obf_Create_Thread[i] != '\0'; i++) obf_Create_Thread[i] ^= HEX_K;
     // for (int i = 0; obf_Exit_Thread[i] != '\0'; i++) obf_Exit_Thread[i] ^= HEX_K;
 
     // printf("Loading user32.dll\n");
     // hUser32 = (HMODULE)LoadLibraryA("user32.dll");
-    hkernel32 = (HMODULE)LoadLibraryA(obf_Ker_32);
+    hkernel32 = (HMODULE)GetModuleHandleA(obf_Ker_32);
     My_Virt_Alloc = (VirtualAllocFn)FindExportAddress(hkernel32, obf_Virt_Alloc);     // get the address of VirtualAlloc
     My_Virt_Protect = (VirtualProtectFn)FindExportAddress(hkernel32, obf_Virt_Protect); // get the address of VirtualProtect
     My_Virt_Free = (VirtualFreeFn)FindExportAddress(hkernel32, obf_Virt_Free);       // get the address of VirtualFree
     My_Get_ProcAddress = (GetProcAddressFn)FindExportAddress(hkernel32, obf_Get_ProcAddress); // get the address of GetProcAddress   [still comming]
+
     // My_Create_Thread = (CreateThreadFn)FindExportAddress(hkernel32, obf_Create_Thread); // get the address of CreateThread [mila hi nahi]
     // My_Exit_Thread = (ExitThreadFn)FindExportAddress(hkernel32, obf_Exit_Thread);     // get the address of ExitThread [mila hi nahi] 
 
