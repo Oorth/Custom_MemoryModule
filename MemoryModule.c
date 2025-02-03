@@ -56,6 +56,7 @@ struct ExportNameEntry
 
 typedef BOOL (WINAPI *DllEntryProc)(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved);
 typedef int (WINAPI *ExeEntryProc)(void);
+void* FindExportAddress(HMODULE hModule, const char* funcName);
 
 #ifdef _WIN64
 typedef struct POINTER_LIST 
@@ -98,6 +99,28 @@ typedef struct
 } SECTIONFINALIZEDATA, *PSECTIONFINALIZEDATA;
 
 #define GET_HEADER_DICTIONARY(module, idx)  &(module)->headers->OptionalHeader.DataDirectory[idx]
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+HMODULE hUser32, hkernel32, hPsapi;
+#define HEX_K 0xFF
+#define X_C(c) ((char)((c) ^ HEX_K))
+
+typedef LPVOID(WINAPI *VirtualAllocFn)(LPVOID, SIZE_T, DWORD, DWORD);
+typedef BOOL(WINAPI *VirtualProtectFn)(LPVOID, SIZE_T, DWORD, PDWORD);
+typedef BOOL(WINAPI *VirtualFreeFn)(LPVOID, SIZE_T, DWORD);
+typedef FARPROC(WINAPI *GetProcAddressFn)(HMODULE, LPCSTR);
+// typedef HANDLE(WINAPI *CreateThreadFn)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
+// typedef VOID(WINAPI *ExitThreadFn)(DWORD);
+
+VirtualAllocFn My_Virt_Alloc;
+VirtualProtectFn My_Virt_Protect;
+VirtualFreeFn My_Virt_Free;
+GetProcAddressFn My_Get_ProcAddress;
+// CreateThreadFn My_Create_Thread;
+// ExitThreadFn My_Exit_Thread;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static inline uintptr_t AlignValueDown(uintptr_t value, uintptr_t alignment)
 {
@@ -233,8 +256,7 @@ static int ProtectionFlags[2][2][2] = {
     },
 };
 
-static SIZE_T
-GetRealSectionSize(PMEMORYMODULE module, PIMAGE_SECTION_HEADER section) {
+static SIZE_T GetRealSectionSize(PMEMORYMODULE module, PIMAGE_SECTION_HEADER section) {
     DWORD size = section->SizeOfRawData;
     if (size == 0) {
         if (section->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA) {
@@ -246,8 +268,7 @@ GetRealSectionSize(PMEMORYMODULE module, PIMAGE_SECTION_HEADER section) {
     return (SIZE_T) size;
 }
 
-static BOOL
-FinalizeSection(PMEMORYMODULE module, PSECTIONFINALIZEDATA sectionData) {
+static BOOL FinalizeSection(PMEMORYMODULE module, PSECTIONFINALIZEDATA sectionData) {
     DWORD protect, oldProtect;
     BOOL executable;
     BOOL readable;
@@ -280,7 +301,7 @@ FinalizeSection(PMEMORYMODULE module, PSECTIONFINALIZEDATA sectionData) {
     }
 
     // change memory access flags
-    if (VirtualProtect(sectionData->address, sectionData->size, protect, &oldProtect) == 0) {
+    if (My_Virt_Protect(sectionData->address, sectionData->size, protect, &oldProtect) == 0) {
         OutputLastError("Error protecting memory page");
         return FALSE;
     }
@@ -486,13 +507,14 @@ static BOOL BuildImportTable(PMEMORYMODULE module)
 LPVOID MemoryDefaultAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD protect, void* userdata)
 {
 	UNREFERENCED_PARAMETER(userdata);
-	return VirtualAlloc(address, size, allocationType, protect);
+    //printf("Allocating %d bytes at %p\n", size, address);
+	return My_Virt_Alloc(address, size, allocationType, protect);
 }
 
 BOOL MemoryDefaultFree(LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType, void* userdata)
 {
 	UNREFERENCED_PARAMETER(userdata);
-	return VirtualFree(lpAddress, dwSize, dwFreeType);
+	return My_Virt_Free(lpAddress, dwSize, dwFreeType);
 }
 
 HCUSTOMMODULE MemoryDefaultLoadLibrary(LPCSTR filename, void *userdata)
@@ -510,7 +532,7 @@ HCUSTOMMODULE MemoryDefaultLoadLibrary(LPCSTR filename, void *userdata)
 FARPROC MemoryDefaultGetProcAddress(HCUSTOMMODULE module, LPCSTR name, void *userdata)
 {
     UNREFERENCED_PARAMETER(userdata);
-    return (FARPROC) GetProcAddress((HMODULE) module, name);
+    return (FARPROC) My_Get_ProcAddress((HMODULE) module, name);
 }
 
 void MemoryDefaultFreeLibrary(HCUSTOMMODULE module, void *userdata)
@@ -540,6 +562,44 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size, CustomAllocFunc
 #ifdef _WIN64
     POINTER_LIST *blockedMemory = NULL;
 #endif
+
+//
+
+    char obf_Ker_32[] = { X_C('k'), X_C('e'), X_C('r'), X_C('n'), X_C('e'), X_C('l'), X_C('3'), X_C('2'), X_C('.'), X_C('d'), X_C('l'), X_C('l'), '\0'};
+    char obf_Virt_Alloc[] = { X_C('V'), X_C('i'), X_C('r'), X_C('t'), X_C('u'), X_C('a'), X_C('l'), X_C('A'), X_C('l'), X_C('l'), X_C('o'), X_C('c'), '\0'};
+    char obf_Virt_Protect[] = { X_C('V'), X_C('i'), X_C('r'), X_C('t'), X_C('u'), X_C('a'), X_C('l'), X_C('P'), X_C('r'), X_C('o'), X_C('t'), X_C('e'), X_C('c'), X_C('t'), '\0'};
+    char obf_Virt_Free[] = { X_C('V'), X_C('i'), X_C('r'), X_C('t'), X_C('u'), X_C('a'), X_C('l'), X_C('F'), X_C('r'), X_C('e'), X_C('e'), '\0'};
+    char obf_Get_ProcAddress[] = { X_C('G'), X_C('e'), X_C('t'), X_C('P'), X_C('r'), X_C('o'), X_C('c'), X_C('A'), X_C('d'), X_C('d'), X_C('r'), X_C('e'), X_C('s'), X_C('s'), '\0'};
+    // char obf_Create_Thread[] = { X_C('C'), X_C('r'), X_C('e'), X_C('a'), X_C('t'), X_C('e'), X_C('T'), X_C('h'), X_C('r'), X_C('e'), X_C('a'), X_C('d'), '\0'};
+    // char obf_Exit_Thread[] = { X_C('E'), X_C('x'), X_C('i'), X_C('t'), X_C('T'), X_C('h'), X_C('r'), X_C('e'), X_C('a'), X_C('d'), '\0'};
+
+    for (int i = 0; obf_Ker_32[i] != '\0'; i++) obf_Ker_32[i] ^= HEX_K;
+    for (int i = 0; obf_Virt_Alloc[i] != '\0'; i++) obf_Virt_Alloc[i] ^= HEX_K;
+    for (int i = 0; obf_Virt_Protect[i] != '\0'; i++) obf_Virt_Protect[i] ^= HEX_K;
+    for (int i = 0; obf_Virt_Free[i] != '\0'; i++) obf_Virt_Free[i] ^= HEX_K;
+    for (int i = 0; obf_Get_ProcAddress[i] != '\0'; i++) obf_Get_ProcAddress[i] ^= HEX_K;
+    // for (int i = 0; obf_Create_Thread[i] != '\0'; i++) obf_Create_Thread[i] ^= HEX_K;
+    // for (int i = 0; obf_Exit_Thread[i] != '\0'; i++) obf_Exit_Thread[i] ^= HEX_K;
+
+    // printf("Loading user32.dll\n");
+    // hUser32 = (HMODULE)LoadLibraryA("user32.dll");
+    hkernel32 = (HMODULE)LoadLibraryA(obf_Ker_32);
+    My_Virt_Alloc = (VirtualAllocFn)FindExportAddress(hkernel32, obf_Virt_Alloc);     // get the address of VirtualAlloc
+    My_Virt_Protect = (VirtualProtectFn)FindExportAddress(hkernel32, obf_Virt_Protect); // get the address of VirtualProtect
+    My_Virt_Free = (VirtualFreeFn)FindExportAddress(hkernel32, obf_Virt_Free);       // get the address of VirtualFree
+    My_Get_ProcAddress = (GetProcAddressFn)FindExportAddress(hkernel32, obf_Get_ProcAddress); // get the address of GetProcAddress   [still comming]
+    // My_Create_Thread = (CreateThreadFn)FindExportAddress(hkernel32, obf_Create_Thread); // get the address of CreateThread [mila hi nahi]
+    // My_Exit_Thread = (ExitThreadFn)FindExportAddress(hkernel32, obf_Exit_Thread);     // get the address of ExitThread [mila hi nahi] 
+
+    SecureZeroMemory(obf_Ker_32, sizeof(obf_Ker_32));
+    SecureZeroMemory(obf_Virt_Alloc, sizeof(obf_Virt_Alloc));
+    SecureZeroMemory(obf_Virt_Protect, sizeof(obf_Virt_Protect));
+    SecureZeroMemory(obf_Virt_Free, sizeof(obf_Virt_Free));
+    SecureZeroMemory(obf_Get_ProcAddress, sizeof(obf_Get_ProcAddress));
+    // SecureZeroMemory(obf_Create_Thread, sizeof(obf_Create_Thread));
+    // SecureZeroMemory(obf_Exit_Thread, sizeof(obf_Exit_Thread));
+
+//
 
     if (!CheckSize(size, sizeof(IMAGE_DOS_HEADER))) {
         return NULL;
@@ -643,7 +703,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size, CustomAllocFunc
     }
 #endif
 
-    result = (PMEMORYMODULE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(MEMORYMODULE));
+    result = (PMEMORYMODULE) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(MEMORYMODULE));
     if (result == NULL) {
         freeMemory(code, 0, MEM_RELEASE, userdata);
 #ifdef _WIN64
@@ -751,6 +811,35 @@ static int _find(const void *a, const void *b)
     LPCSTR *name = (LPCSTR *) a;
     const struct ExportNameEntry *p = (const struct ExportNameEntry*) b;
     return strcmp(*name, p->name);
+}
+
+void* FindExportAddress(HMODULE hModule, const char* funcName)
+{
+    IMAGE_DOS_HEADER* dosHeader = (IMAGE_DOS_HEADER*)hModule;
+    IMAGE_NT_HEADERS* ntHeaders = (IMAGE_NT_HEADERS*)((BYTE*)hModule + dosHeader->e_lfanew);
+
+    IMAGE_EXPORT_DIRECTORY* exportDir = (IMAGE_EXPORT_DIRECTORY*)((BYTE*)hModule + ntHeaders->OptionalHeader.DataDirectory[0].VirtualAddress);
+
+    DWORD* nameRVAs = (DWORD*)((BYTE*)hModule + exportDir->AddressOfNames);
+    WORD* ordRVAs = (WORD*)((BYTE*)hModule + exportDir->AddressOfNameOrdinals);
+    DWORD* funcRVAs = (DWORD*)((BYTE*)hModule + exportDir->AddressOfFunctions);
+
+    for (DWORD i = 0; i < exportDir->NumberOfNames; ++i)
+    {
+        char* funcNameFromExport = (char*)((BYTE*)hModule + nameRVAs[i]);
+        if (strcmp(funcNameFromExport, funcName) == 0)
+        {
+            DWORD funcRVA = funcRVAs[ordRVAs[i]];
+            return (void*)((BYTE*)hModule + funcRVA);
+        }
+    }
+
+    // Print error message without std::string
+    char errorMsg[256] = "Failed to find export address for function: ";
+    strncat(errorMsg, funcName, sizeof(errorMsg) - strlen(errorMsg) - 1);
+    MessageBoxA(NULL, errorMsg, "Error", MB_OK);
+
+    return NULL;
 }
 
 FARPROC MemoryGetProcAddress(HMEMORYMODULE mod, LPCSTR name)
